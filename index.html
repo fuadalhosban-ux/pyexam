@@ -21,8 +21,18 @@
   .label span { font-weight: 400; text-transform: none; letter-spacing: 0; color: #4a5568; }
   .editwrap { display: flex; flex: 1; min-height: 0; }
   #gutter { padding: 10px 6px 10px 8px; text-align: right; color: #8a94a3; background: #f7f8fa; border-right: 1px solid #e3e7ec; user-select: none; overflow: hidden; white-space: pre; }
-  #code, #gutter, #out { font-family: Consolas, Menlo, "Courier New", monospace; font-size: 15px; line-height: 1.45; }
-  #code { flex: 1; border: 0; outline: none; resize: none; padding: 10px; white-space: pre; overflow: auto; tab-size: 4; }
+  #gutter, #out { font-family: Consolas, Menlo, "Courier New", monospace; font-size: 15px; line-height: 1.45; }
+  .codebox { position: relative; flex: 1; min-width: 0; }
+  #code, #hl { position: absolute; inset: 0; margin: 0; border: 0; padding: 10px; white-space: pre; tab-size: 4; font-family: Consolas, Menlo, "Courier New", monospace; font-size: 15px; line-height: 1.45; letter-spacing: 0; word-spacing: 0; }
+  #hl { overflow: hidden; color: #1d2330; pointer-events: none; background: #fff; }
+  #code { overflow: auto; outline: none; resize: none; background: transparent; color: transparent; caret-color: #1d2330; z-index: 1; }
+  #code::selection { background: rgba(31, 58, 95, .25); color: transparent; }
+  .t-kw { color: #7c3aed; }
+  .t-bi { color: #0b7285; }
+  .t-str { color: #2e7d32; }
+  .t-com { color: #8a8f98; font-style: italic; }
+  .t-num { color: #c2410c; }
+  .t-def { color: #1d4ed8; }
   #out { flex: 1; margin: 0; padding: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: #10151c; color: #e6edf3; }
   #out .err { color: #ff8a80; }
   #out .sys { color: #8fb3d9; }
@@ -44,7 +54,10 @@
     <div class="label">Your code</div>
     <div class="editwrap">
       <div id="gutter">1</div>
-      <textarea id="code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Python code editor"></textarea>
+      <div class="codebox">
+        <pre id="hl" aria-hidden="true"></pre>
+        <textarea id="code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Python code editor"></textarea>
+      </div>
     </div>
   </section>
   <section class="pane">
@@ -292,6 +305,37 @@ onmessage = function (e) {
   // Keep a draft in this browser tab only, so an accidental reload does not lose work.
   try { var saved = sessionStorage.getItem('pyexam_draft'); if (saved) code.value = saved; } catch (e) {}
 
+  // Colour the code (comments grey, keywords purple, strings green, numbers orange). Display only - no suggestions.
+  var hl = document.getElementById('hl');
+  var KW = ' False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield match case self ';
+  var BI = ' print input int float str bool list dict tuple set range len sum min max abs round sorted reversed enumerate zip map filter open type isinstance super object format any all chr ord divmod pow id hex bin oct iter next Exception ValueError TypeError ZeroDivisionError IndexError KeyError NameError AttributeError NotImplementedError RuntimeError ';
+  var TOKEN = /("""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|[rRbBfFuU]{0,2}"(?:[^"\\\n]|\\.)*"?|[rRbBfFuU]{0,2}'(?:[^'\\\n]|\\.)*'?)|(#[^\n]*)|(\b\d+(?:\.\d*)?(?:[eE][+-]?\d+)?j?\b|\.\d+\b)|([A-Za-z_][A-Za-z0-9_]*)/g;
+  function esc(t) { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function highlight() {
+    var src = code.value, html = '', last = 0, m, prevWord = '';
+    TOKEN.lastIndex = 0;
+    while ((m = TOKEN.exec(src)) !== null) {
+      html += esc(src.slice(last, m.index));
+      var t = m[0], cls = '';
+      if (m[1]) cls = 't-str';
+      else if (m[2]) cls = 't-com';
+      else if (m[3]) cls = 't-num';
+      else if (m[4]) {
+        if (prevWord === 'def' || prevWord === 'class') cls = 't-def';
+        else if (KW.indexOf(' ' + t + ' ') >= 0) cls = 't-kw';
+        else if (BI.indexOf(' ' + t + ' ') >= 0) cls = 't-bi';
+        prevWord = t;
+      }
+      if (!m[4]) prevWord = '';
+      html += cls ? '<span class="' + cls + '">' + esc(t) + '</span>' : esc(t);
+      last = m.index + t.length;
+    }
+    html += esc(src.slice(last));
+    hl.innerHTML = html + '\n';
+    syncScroll();
+  }
+  function syncScroll() { hl.scrollTop = code.scrollTop; hl.scrollLeft = code.scrollLeft; gutter.scrollTop = code.scrollTop; }
+
   function updateGutter() {
     var n = code.value.split('\n').length, s = '';
     for (var i = 1; i <= n; i++) s += i + '\n';
@@ -300,9 +344,10 @@ onmessage = function (e) {
   }
   code.addEventListener('input', function () {
     updateGutter();
+    highlight();
     try { sessionStorage.setItem('pyexam_draft', code.value); } catch (e) {}
   });
-  code.addEventListener('scroll', function () { gutter.scrollTop = code.scrollTop; });
+  code.addEventListener('scroll', syncScroll);
 
   // Tab inserts 4 spaces; Enter keeps the current indentation (and adds 4 after a colon).
   code.addEventListener('keydown', function (e) {
@@ -338,6 +383,7 @@ onmessage = function (e) {
   // Block the right-click menu outside the code box, so there is no "search the web" / "look up" option.
   document.addEventListener('contextmenu', function (e) { if (e.target !== code) e.preventDefault(); });
   updateGutter();
+  highlight();
   startWorker();
   code.focus();
 })();
