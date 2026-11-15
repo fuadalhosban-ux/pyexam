@@ -16,20 +16,18 @@
   #clear { background: #e1e5ea; color: #1d2330; }
   button:disabled { opacity: .45; cursor: default; }
   main { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px; height: calc(100% - 50px); }
-  .col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
   .pane { display: flex; flex-direction: column; min-height: 0; background: #fff; border: 1px solid #cfd5dd; border-radius: 6px; overflow: hidden; }
-  .grow { flex: 1; }
   .label { font-size: 12px; font-weight: 700; padding: 6px 10px; background: #e9edf2; border-bottom: 1px solid #cfd5dd; text-transform: uppercase; letter-spacing: .04em; }
   .label span { font-weight: 400; text-transform: none; letter-spacing: 0; color: #4a5568; }
   .editwrap { display: flex; flex: 1; min-height: 0; }
   #gutter { padding: 10px 6px 10px 8px; text-align: right; color: #8a94a3; background: #f7f8fa; border-right: 1px solid #e3e7ec; user-select: none; overflow: hidden; white-space: pre; }
-  #code, #gutter, #out, #stdin { font-family: Consolas, "Courier New", monospace; font-size: 15px; line-height: 1.45; }
-  #code, #stdin { flex: 1; border: 0; outline: none; resize: none; padding: 10px; white-space: pre; overflow: auto; tab-size: 4; }
-  #stdin { height: 110px; flex: none; background: #fffdf3; }
+  #code, #gutter, #out { font-family: Consolas, Menlo, "Courier New", monospace; font-size: 15px; line-height: 1.45; }
+  #code { flex: 1; border: 0; outline: none; resize: none; padding: 10px; white-space: pre; overflow: auto; tab-size: 4; }
   #out { flex: 1; margin: 0; padding: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: #10151c; color: #e6edf3; }
   #out .err { color: #ff8a80; }
   #out .sys { color: #8fb3d9; }
   #out .in { color: #ffe08a; }
+  #out input { font: inherit; color: #ffe08a; background: #1d2633; border: 0; border-bottom: 2px solid #ffe08a; outline: none; width: 55%; padding: 0 4px; }
   @media (max-width: 800px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
 </style>
 </head>
@@ -42,96 +40,190 @@
   <button id="clear">Clear output</button>
 </header>
 <main>
-  <div class="col">
-    <section class="pane grow">
-      <div class="label">Your code</div>
-      <div class="editwrap">
-        <div id="gutter">1</div>
-        <textarea id="code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Python code editor"></textarea>
-      </div>
-    </section>
-    <section class="pane">
-      <div class="label">Input <span>&mdash; if your program uses input(), type the values here first, one per line</span></div>
-      <textarea id="stdin" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Program input"></textarea>
-    </section>
-  </div>
   <section class="pane">
-    <div class="label">Output</div>
+    <div class="label">Your code</div>
+    <div class="editwrap">
+      <div id="gutter">1</div>
+      <textarea id="code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Python code editor"></textarea>
+    </div>
+  </section>
+  <section class="pane">
+    <div class="label">Output <span>&mdash; when your program asks for input, type here and press Enter</span></div>
     <pre id="out" aria-live="polite"></pre>
   </section>
 </main>
+
+<!-- Python side: runs the student's program. Input is interactive: when the program needs a value
+     that has not been typed yet, it stops, the page asks the student, and the program is replayed
+     from the start with all answers so far (output that was already shown is not shown again). -->
+<script type="text/plain" id="py-runner">
+import sys, builtins, traceback, linecache, random
+
+class _NeedInput(BaseException):
+    pass
+
+class _Out:
+    def __init__(self, skip, emit):
+        self.skip = skip
+        self.emit = emit
+        self.stopped = False
+    def write(self, s):
+        s = str(s)
+        n = len(s)
+        if self.stopped:
+            return n
+        if self.skip > 0:
+            if n <= self.skip:
+                self.skip -= n
+                return n
+            s = s[self.skip:]
+            self.skip = 0
+        if s:
+            self.emit('out', s)
+        return n
+    def flush(self):
+        pass
+    def isatty(self):
+        return False
+
+class _Err:
+    def __init__(self, emit):
+        self.emit = emit
+    def write(self, s):
+        self.emit('err', str(s))
+        return len(s)
+    def flush(self):
+        pass
+
+def __exam_run(src, inputs, skip, seed, emit):
+    inputs = list(inputs)
+    state = {'i': 0, 'need': False}
+    out = _Out(int(skip), emit)
+    old_out, old_err = sys.stdout, sys.stderr
+    sys.stdout = out
+    sys.stderr = _Err(emit)
+    random.seed(seed)
+
+    # After the program has asked for input we do not have yet, stop it at the next line it runs,
+    # even if the student's own try/except caught the stop signal.
+    def tracer(frame, event, arg):
+        if frame.f_code.co_filename != 'main.py':
+            return None
+        if event == 'line' and state['need']:
+            raise _NeedInput()
+        return tracer
+
+    def arm():
+        f = sys._getframe(1)
+        while f is not None:
+            if f.f_code.co_filename == 'main.py':
+                f.f_trace = tracer
+            f = f.f_back
+        sys.settrace(tracer)
+
+    def exam_input(prompt=''):
+        if state['need']:
+            raise _NeedInput()
+        out.write(str(prompt))
+        if state['i'] < len(inputs):
+            v = inputs[state['i']]
+            state['i'] += 1
+            out.write(v + '\n')
+            return v
+        state['need'] = True
+        out.stopped = True
+        arm()
+        raise _NeedInput()
+
+    b = dict(builtins.__dict__)
+    b['input'] = exam_input
+    g = {'__name__': '__main__', '__builtins__': b}
+    linecache.cache['main.py'] = (len(src), None, src.splitlines(True), 'main.py')
+    result = 'done'
+    try:
+        exec(compile(src, 'main.py', 'exec'), g)
+        if state['need']:
+            result = 'need'
+    except _NeedInput:
+        result = 'need'
+    except SystemExit:
+        pass
+    except BaseException as e:
+        if state['need']:
+            result = 'need'
+        else:
+            tb = e.__traceback__.tb_next if not isinstance(e, SyntaxError) else None
+            sys.stderr.write(''.join(traceback.format_exception(type(e), e, tb)))
+    finally:
+        sys.settrace(None)
+        sys.stdout, sys.stderr = old_out, old_err
+    return result
+</script>
+
+<script type="text/plain" id="js-worker">
+var py = null, runFn = null;
+function emit(kind, s) { postMessage({ t: kind, s: s }); }
+import(self.BASE + 'pyodide.mjs')
+  .then(function (m) { return m.loadPyodide({ indexURL: self.BASE }); })
+  .then(function (p) {
+    py = p;
+    py.runPython(self.RUNNER);
+    runFn = py.globals.get('__exam_run');
+    postMessage({ t: 'ready' });
+  })
+  .catch(function (e) { postMessage({ t: 'fail', s: String(e) }); });
+onmessage = function (e) {
+  var d = e.data, res = 'done';
+  try {
+    var inputs = py.toPy(d.inputs);
+    res = runFn(d.code, inputs, d.skip, d.seed, emit);
+    inputs.destroy();
+  } catch (err) { emit('err', String(err)); }
+  postMessage({ t: res === 'need' ? 'need' : 'done' });
+};
+</script>
+
 <script>
 (function () {
   var params = new URLSearchParams(location.search);
   var BASE = params.get('base') || 'https://cdn.jsdelivr.net/pyodide/v314.0.8/full/';
+  var RUNNER = document.getElementById('py-runner').textContent;
+  var WORKER = document.getElementById('js-worker').textContent;
   var code = document.getElementById('code');
-  var stdinBox = document.getElementById('stdin');
   var gutter = document.getElementById('gutter');
   var out = document.getElementById('out');
   var runBtn = document.getElementById('run');
   var stopBtn = document.getElementById('stop');
   var clearBtn = document.getElementById('clear');
   var statusEl = document.getElementById('status');
-  var worker = null, ready = false, running = false, outChars = 0;
-  var MAX_OUT = 200000;
-
-  // The worker runs real Python (Pyodide), so a stuck program can be stopped without freezing the page.
-  var workerSrc = [
-    "var py = null; var dec = new TextDecoder(); var buf = '';",
-    "function flush(){ if (buf) { postMessage({t:'out', s:buf}); buf=''; } }",
-    "var RUNNER = [",
-    "'import sys, traceback, linecache',",
-    "'def __exam_run(src):',",
-    "'    g = {\"__name__\": \"__main__\"}',",
-    "'    linecache.cache[\"main.py\"] = (len(src), None, src.splitlines(True), \"main.py\")',",
-    "'    try:',",
-    "'        exec(compile(src, \"main.py\", \"exec\"), g)',",
-    "'    except SystemExit:',",
-    "'        pass',",
-    "'    except BaseException as e:',",
-    "'        sys.stdout.flush()',",
-    "'        tb = e.__traceback__.tb_next if isinstance(e, Exception) and not isinstance(e, SyntaxError) else None',",
-    "'        sys.stderr.write(\"\".join(traceback.format_exception(type(e), e, tb)))',",
-    "'    sys.stdout.flush()'",
-    "].join('\\n');",
-    "import(self.BASE + 'pyodide.mjs').then(function(m){ return m.loadPyodide({indexURL: self.BASE}); }).then(function(p){",
-    "  py = p; py.runPython(RUNNER);",
-    "  py.setStdout({ write: function(b){ buf += dec.decode(b, {stream:true}); if (buf.length > 2000 || buf.indexOf('\\n') >= 0) flush(); return b.length; } });",
-    "  py.setStderr({ write: function(b){ flush(); postMessage({t:'err', s:dec.decode(b)}); return b.length; } });",
-    "  postMessage({t:'ready'});",
-    "}).catch(function(e){ postMessage({t:'fail', s:String(e)}); });",
-    "onmessage = function(e){",
-    "  var lines = e.data.input.replace(/\\r/g,'').split('\\n'); if (lines.length && lines[lines.length-1] === '') lines.pop();",
-    "  var i = 0;",
-    "  py.setStdin({ stdin: function(){ flush(); if (i < lines.length) { var v = lines[i++]; postMessage({t:'in', s:v}); return v + '\\n'; } postMessage({t:'noin'}); return null; }, isatty: false });",
-    "  try { py.globals.get('__exam_run')(e.data.code); } catch (err) { flush(); postMessage({t:'err', s:String(err)}); }",
-    "  flush(); postMessage({t:'done'});",
-    "};"
-  ].join('\n');
+  var worker = null, ready = false, running = false;
+  var session = null;   // { code, inputs, shown, seed }
+  var outChars = 0, MAX_OUT = 200000;
 
   function startWorker() {
     ready = false;
     runBtn.disabled = true;
     statusEl.textContent = 'Loading Python…';
-    var blob = new Blob(['self.BASE=' + JSON.stringify(BASE) + ';\n' + workerSrc], { type: 'text/javascript' });
-    worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
-    worker.onmessage = function (e) {
-      var m = e.data;
-      if (m.t === 'ready') { ready = true; statusEl.textContent = 'Ready'; if (!running) runBtn.disabled = false; }
-      else if (m.t === 'out') write(m.s);
-      else if (m.t === 'err') write(m.s, 'err');
-      else if (m.t === 'in') write(m.s + '\n', 'in');
-      else if (m.t === 'noin') write('\n[Your program asked for input, but the Input box has no more lines. Type the values in the Input box (one per line) and click Run again.]\n', 'err');
-      else if (m.t === 'done') { write('\n--- Program finished ---\n', 'sys'); setRunning(false); }
-      else if (m.t === 'fail') { statusEl.textContent = 'Python failed to load - reload the page'; write('Python could not load: ' + m.s + '\n', 'err'); }
-    };
-    worker.onerror = function (e) { statusEl.textContent = 'Python failed to load - reload the page'; };
+    var src = 'self.BASE=' + JSON.stringify(BASE) + ';\nself.RUNNER=' + JSON.stringify(RUNNER) + ';\n' + WORKER;
+    worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' });
+    worker.onmessage = onMessage;
+    worker.onerror = function () { statusEl.textContent = 'Python failed to load - reload the page'; };
+  }
+
+  function onMessage(e) {
+    var m = e.data;
+    if (m.t === 'ready') { ready = true; setRunning(false); }
+    else if (m.t === 'out') { if (session) session.shown += m.s.length; write(m.s); }
+    else if (m.t === 'err') write(m.s, 'err');
+    else if (m.t === 'need') askInput();
+    else if (m.t === 'done') { write('\n--- Program finished ---\n', 'sys'); session = null; setRunning(false); }
+    else if (m.t === 'fail') { statusEl.textContent = 'Python failed to load - reload the page'; write('Python could not load: ' + m.s + '\n', 'err'); }
   }
 
   function write(text, cls) {
     if (outChars > MAX_OUT) return;
     outChars += text.length;
-    if (outChars > MAX_OUT) { text = text.slice(0, 200) + '\n[Output too long - stopped showing more]\n'; cls = 'sys'; }
+    if (outChars > MAX_OUT) { text = '\n[Output too long - stopped showing more]\n'; cls = 'sys'; }
     var span = document.createElement('span');
     if (cls) span.className = cls;
     span.textContent = text;
@@ -139,9 +231,40 @@
     out.scrollTop = out.scrollHeight;
   }
 
+  function askInput() {
+    statusEl.textContent = 'Waiting for your input…';
+    var box = document.createElement('input');
+    box.type = 'text';
+    box.setAttribute('autocomplete', 'off');
+    box.setAttribute('autocorrect', 'off');
+    box.setAttribute('autocapitalize', 'off');
+    box.spellcheck = false;
+    box.setAttribute('aria-label', 'Program input');
+    out.appendChild(box);
+    out.scrollTop = out.scrollHeight;
+    box.focus();
+    box.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter' || !session) return;
+      ev.preventDefault();
+      var val = box.value;
+      var echo = document.createElement('span');
+      echo.className = 'in';
+      echo.textContent = val + '\n';
+      out.replaceChild(echo, box);
+      session.inputs.push(val);
+      session.shown += val.length + 1;
+      statusEl.textContent = 'Running… (press Stop if it does not finish)';
+      send();
+    });
+  }
+
+  function send() {
+    worker.postMessage({ code: session.code, inputs: session.inputs, skip: session.shown, seed: session.seed });
+  }
+
   function setRunning(on) {
     running = on;
-    runBtn.disabled = on || !ready;
+    runBtn.disabled = !ready || on;
     stopBtn.disabled = !on;
     statusEl.textContent = on ? 'Running… (press Stop if it does not finish)' : (ready ? 'Ready' : 'Loading Python…');
   }
@@ -149,23 +272,25 @@
   function run() {
     if (runBtn.disabled) return;
     out.textContent = ''; outChars = 0;
+    session = { code: code.value, inputs: [], shown: 0, seed: Math.floor(Math.random() * 1e9) };
     setRunning(true);
-    worker.postMessage({ code: code.value, input: stdinBox.value });
+    send();
   }
 
   function stop() {
     if (!running) return;
-    worker.terminate();
+    var box = out.querySelector('input');
+    if (box) box.remove();
     write('\n--- Program stopped ---\n', 'sys');
-    setRunning(false);
+    session = null;
+    worker.terminate();
+    running = false;
+    stopBtn.disabled = true;
     startWorker();
   }
 
   // Keep a draft in this browser tab only, so an accidental reload does not lose work.
-  try {
-    var saved = sessionStorage.getItem('pyexam_draft'); if (saved) code.value = saved;
-    var savedIn = sessionStorage.getItem('pyexam_input'); if (savedIn) stdinBox.value = savedIn;
-  } catch (e) {}
+  try { var saved = sessionStorage.getItem('pyexam_draft'); if (saved) code.value = saved; } catch (e) {}
 
   function updateGutter() {
     var n = code.value.split('\n').length, s = '';
@@ -176,9 +301,6 @@
   code.addEventListener('input', function () {
     updateGutter();
     try { sessionStorage.setItem('pyexam_draft', code.value); } catch (e) {}
-  });
-  stdinBox.addEventListener('input', function () {
-    try { sessionStorage.setItem('pyexam_input', stdinBox.value); } catch (e) {}
   });
   code.addEventListener('scroll', function () { gutter.scrollTop = code.scrollTop; });
 
@@ -212,9 +334,9 @@
 
   runBtn.addEventListener('click', run);
   stopBtn.addEventListener('click', stop);
-  clearBtn.addEventListener('click', function () { out.textContent = ''; outChars = 0; });
-  // Block the right-click menu outside the text boxes, so there is no "search the web" / "look up" option.
-  document.addEventListener('contextmenu', function (e) { if (e.target !== code && e.target !== stdinBox) e.preventDefault(); });
+  clearBtn.addEventListener('click', function () { if (!running) { out.textContent = ''; outChars = 0; } });
+  // Block the right-click menu outside the code box, so there is no "search the web" / "look up" option.
+  document.addEventListener('contextmenu', function (e) { if (e.target !== code) e.preventDefault(); });
   updateGutter();
   startWorker();
   code.focus();
