@@ -226,6 +226,8 @@
       compiled = { src: src, dir: dir, ok: rc === 0 };
     }
     if (!compiled.ok) { write('\n--- Fix the errors above and press Run again ---\n', 'sys'); setRunning(false); return; }
+    // Show the GUI area before a Swing program starts, so its window has room to draw.
+    if (/javax\.swing|java\.awt/.test(src)) guiPane.classList.add('show');
     session = { inputs: [], shown: 0, seed: Math.floor(Math.random() * 1e9) };
     exec();
   }
@@ -250,6 +252,7 @@
     } else {
       write('\n--- Program finished ---\n', 'sys');
     }
+    if (!guiOpen) guiPane.classList.remove('show');
     session = null;
     setRunning(false);
   }
