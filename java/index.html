@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Java Exam Editor</title>
+<script src="https://cjrtnc.leaningtech.com/5.0/loader.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: Arial, Helvetica, sans-serif; background: #f4f5f7; color: #1d2330; }
+  header { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #7a3b12; color: #fff; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  #status { margin-right: auto; font-size: 13px; color: #f3dccb; }
+  button { font-size: 14px; padding: 7px 16px; border: 0; border-radius: 5px; cursor: pointer; font-weight: 600; }
+  #run { background: #2e9d4f; color: #fff; }
+  #stop { background: #c0392b; color: #fff; }
+  #clear { background: #e1e5ea; color: #1d2330; }
+  button:disabled { opacity: .45; cursor: default; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px; height: calc(100% - 50px); }
+  .pane { display: flex; flex-direction: column; min-height: 0; background: #fff; border: 1px solid #cfd5dd; border-radius: 6px; overflow: hidden; }
+  .right { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .right .pane { flex: 1; }
+  .label { font-size: 12px; font-weight: 700; padding: 6px 10px; background: #e9edf2; border-bottom: 1px solid #cfd5dd; text-transform: uppercase; letter-spacing: .04em; }
+  .label span { font-weight: 400; text-transform: none; letter-spacing: 0; color: #4a5568; }
+  .editwrap { display: flex; flex: 1; min-height: 0; }
+  #gutter { padding: 10px 6px 10px 8px; text-align: right; color: #8a94a3; background: #f7f8fa; border-right: 1px solid #e3e7ec; user-select: none; overflow: hidden; white-space: pre; }
+  #gutter, #out { font-family: Consolas, Menlo, "Courier New", monospace; font-size: 15px; line-height: 1.45; }
+  .codebox { position: relative; flex: 1; min-width: 0; }
+  #code, #hl { position: absolute; inset: 0; margin: 0; border: 0; padding: 10px; white-space: pre; tab-size: 4; font-family: Consolas, Menlo, "Courier New", monospace; font-size: 15px; line-height: 1.45; letter-spacing: 0; word-spacing: 0; }
+  #hl { overflow: hidden; color: #1d2330; pointer-events: none; background: #fff; }
+  #code { overflow: auto; outline: none; resize: none; background: transparent; color: transparent; caret-color: #1d2330; z-index: 1; }
+  #code::selection { background: rgba(122, 59, 18, .25); color: transparent; }
+  .t-kw { color: #7c3aed; }
+  .t-bi { color: #0b7285; }
+  .t-str { color: #2e7d32; }
+  .t-com { color: #8a8f98; font-style: italic; }
+  .t-num { color: #c2410c; }
+  .t-def { color: #1d4ed8; }
+  .t-ann { color: #a16207; }
+  #out { flex: 1; margin: 0; padding: 10px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: #10151c; color: #e6edf3; }
+  #out .err { color: #ff8a80; }
+  #out .sys { color: #8fb3d9; }
+  #out .in { color: #ffe08a; }
+  #out input { font: inherit; color: #ffe08a; background: #1d2633; border: 0; border-bottom: 2px solid #ffe08a; outline: none; width: 55%; padding: 0 4px; }
+  #guipane { display: none; }
+  #guipane.show { display: flex; }
+  #gui { flex: 1; min-height: 0; position: relative; background: #e9edf2; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Java Exam Editor</h1>
+  <span id="status">Loading Java&hellip;</span>
+  <button id="run" title="Run (Ctrl+Enter)" disabled>&#9654; Run</button>
+  <button id="stop" disabled>&#9632; Stop</button>
+  <button id="clear">Clear output</button>
+</header>
+<main>
+  <section class="pane">
+    <div class="label">Your code <span>&mdash; one file; put <b>public static void main</b> in your main class</span></div>
+    <div class="editwrap">
+      <div id="gutter">1</div>
+      <div class="codebox">
+        <pre id="hl" aria-hidden="true"></pre>
+        <textarea id="code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Java code editor"></textarea>
+      </div>
+    </div>
+  </section>
+  <div class="right">
+    <section class="pane">
+      <div class="label">Output <span>&mdash; when your program asks for input, type here and press Enter</span></div>
+      <pre id="out" aria-live="polite"></pre>
+    </section>
+    <section class="pane" id="guipane">
+      <div class="label">GUI window <span>&mdash; your Swing window appears here</span></div>
+      <div id="gui"></div>
+    </section>
+  </div>
+</main>
+
+<!-- Exam runner, compiled in the browser when the page loads: adds a loop guard (time limit and Stop),
+     feeds typed input to the program, and formats errors. -->
+<script type="text/plain" id="rt-guard">
+package examrt;
+
+/** Inserted at the top of every loop body by ExamRunner's compiler step. */
+public final class ExamGuard {
+    public static final class Timeout extends Error {
+        public Timeout(String m) { super(m); }
+    }
+    static volatile long start;
+    static volatile long limitMs = 10000;
+    static long count;
+    static long lastYield;
+    static long seed, seedCount;
+    static java.util.Random rnd;
+    public static void reset(long limit, long sd) {
+        start = System.currentTimeMillis(); lastYield = start; limitMs = limit; count = 0;
+        seed = sd; seedCount = 0; rnd = new java.util.Random(sd);
+    }
+    /** Replaces new Random(): same numbers every replay of one run (needed for interactive input). */
+    public static long nextSeed() { return seed * 31 + (++seedCount); }
+    /** Replaces Math.random(). */
+    public static double random() { return rnd.nextDouble(); }
+    public static void tick() {
+        if ((++count & 0x3FF) != 0) return;
+        long now = System.currentTimeMillis();
+        if (now - start > limitMs) {
+            throw new Timeout("Your program ran for more than " + (limitMs / 1000) + " seconds. Check for an infinite loop.");
+        }
+        if (now - lastYield > 100) {
+            lastYield = now;
+            ExamRunner.flushOut();
+            try { Thread.sleep(1); } catch (InterruptedException e) { }
+            if (ExamRunner.stopRequested()) throw new Timeout("Stopped.");
+        }
+    }
+}
+</script>
+<script type="text/plain" id="rt-runner">
+package examrt;
+
+import java.io.*;
+import java.lang.reflect.*;
+import java.net.*;
+import java.nio.charset.Charset;
+import java.util.*;
+import javax.tools.*;
+import com.sun.source.util.*;
+import com.sun.tools.javac.api.*;
+import com.sun.tools.javac.tree.*;
+import com.sun.tools.javac.tree.JCTree.*;
+import com.sun.tools.javac.util.*;
+import com.sun.tools.javac.util.List;
+
+/**
+ * Exam runner for the in-browser Java editor.
+ *   compile <outDir> <src>        -> compiles with loop guards, prints errors, exits 0/1
+ *   run <inputs> <outDir> <limitMs> -> runs main with System.in fed from inputs
+ * Exit codes: 0 ok, 1 runtime error, 42 needs more input, 43 time limit / stopped, 44 no main, 45 GUI running
+ */
+public class ExamRunner {
+    static class NeedInput extends Error { NeedInput() { super(null, null, false, false); } }
+
+    // ---- output: everything goes to the JS side through a native method ----
+    static native void emit(String s);
+    static native void emitErr(String s);
+    static native int jsStop();
+    static native void done(int code);
+    static final StringBuilder buf = new StringBuilder();
+    static synchronized void flushOut() {
+        if (buf.length() > 0) { String s = buf.toString(); buf.setLength(0); emit(s); }
+    }
+    static boolean stopRequested() { try { return jsStop() != 0; } catch (Throwable t) { return false; } }
+    static PrintStream textStream() {
+        OutputStream os = new OutputStream() {
+            ByteArrayOutputStream pend = new ByteArrayOutputStream();
+            public synchronized void write(int b) { pend.write(b); if (b == '\n') push(); }
+            public synchronized void write(byte[] b, int o, int l) { pend.write(b, o, l); push(); }
+            public synchronized void flush() { push(); flushOut(); }
+            void push() { try { synchronized (ExamRunner.class) { buf.append(pend.toString("UTF-8")); } } catch (Exception e) { } pend.reset(); if (buf.length() > 4000) flushOut(); }
+        };
+        try { return new PrintStream(os, true, "UTF-8"); } catch (Exception e) { return new PrintStream(os, true); }
+    }
+
+    static final PrintStream ERR = errStream();
+    static PrintStream errStream() {
+        OutputStream os = new OutputStream() {
+            ByteArrayOutputStream pend = new ByteArrayOutputStream();
+            public synchronized void write(int b) { pend.write(b); if (b == '\n') flush(); }
+            public synchronized void write(byte[] b, int o, int l) { pend.write(b, o, l); flush(); }
+            public synchronized void flush() {
+                if (pend.size() == 0) return;
+                flushOut();
+                try { emitErr(pend.toString("UTF-8")); } catch (Exception e) { }
+                pend.reset();
+            }
+        };
+        try { return new PrintStream(os, true, "UTF-8"); } catch (Exception e) { return new PrintStream(os, true); }
+    }
+
+    public static void main(String[] a) throws Exception {
+        PrintStream ps = textStream();
+        System.setOut(ps);
+        System.setErr(ERR);
+        if (a[0].equals("close")) {
+            try { for (java.awt.Frame f : java.awt.Frame.getFrames()) f.dispose(); } catch (Throwable t) { }
+            done(0);
+            System.exit(0);
+        }
+        int code;
+        try {
+            code = a[0].equals("compile") ? compile(a[1], a[2]) : run(a[1], a[2], Long.parseLong(a[3]), Long.parseLong(a[4]));
+        } catch (Throwable t) {
+            ERR.println("Internal error: " + t);
+            code = 1;
+        }
+        System.out.flush();
+        flushOut();
+        done(code);
+        if (code != 45) System.exit(code);
+    }
+
+    // ---------------- compile ----------------
+    static int compile(String outDir, String srcPath) throws Exception {
+        new File(outDir).mkdirs();
+        JavacTool tool = JavacTool.create();
+        DiagnosticCollector<JavaFileObject> dc = new DiagnosticCollector<JavaFileObject>();
+        StandardJavaFileManager fm = tool.getStandardFileManager(dc, null, Charset.forName("UTF-8"));
+        java.util.List<String> opts = Arrays.asList("-d", outDir, "-g", "-nowarn", "-encoding", "UTF-8",
+                "-classpath", System.getProperty("java.class.path"));
+        final JavacTask task = (JavacTask) tool.getTask(null, fm, dc, opts, null, fm.getJavaFileObjects(srcPath));
+        final Context ctx = ((BasicJavacTask) task).getContext();
+        task.addTaskListener(new TaskListener() {
+            public void started(TaskEvent e) { }
+            public void finished(TaskEvent e) {
+                if (e.getKind() == TaskEvent.Kind.PARSE) {
+                    new Guard(TreeMaker.instance(ctx), Names.instance(ctx)).translate((JCTree) e.getCompilationUnit());
+                }
+            }
+        });
+        boolean ok = task.call();
+        String[] lines = readLines(srcPath);
+        int errors = 0;
+        for (Diagnostic<? extends JavaFileObject> d : dc.getDiagnostics()) {
+            if (d.getKind() != Diagnostic.Kind.ERROR) continue;
+            errors++;
+            String name = d.getSource() == null ? "" : new File(d.getSource().getName()).getName();
+            long ln = d.getLineNumber();
+            ERR.println(name + ":" + ln + ": error: " + d.getMessage(Locale.ENGLISH));
+            if (ln >= 1 && ln <= lines.length) {
+                String l = lines[(int) ln - 1];
+                ERR.println("    " + l);
+                long col = d.getColumnNumber();
+                if (col >= 1) {
+                    StringBuilder sb = new StringBuilder("    ");
+                    for (int i = 1; i < col && i <= l.length(); i++) sb.append(l.charAt(i - 1) == '\t' ? '\t' : ' ');
+                    ERR.println(sb.append('^'));
+                }
+            }
+        }
+        if (!ok) { ERR.println(errors + (errors == 1 ? " error" : " errors")); return 1; }
+        return 0;
+    }
+
+    static String[] readLines(String p) {
+        try {
+            BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(p), "UTF-8"));
+            ArrayList<String> L = new ArrayList<String>(); String s;
+            while ((s = r.readLine()) != null) L.add(s);
+            r.close();
+            return L.toArray(new String[0]);
+        } catch (Exception e) { return new String[0]; }
+    }
+
+    /** Puts examrt.ExamGuard.tick(); at the start of every loop body. */
+    static class Guard extends TreeTranslator {
+        final TreeMaker mk; final Names names;
+        Guard(TreeMaker mk, Names names) { this.mk = mk; this.names = names; }
+        JCStatement wrap(JCStatement body) {
+            mk.at(body.pos);
+            JCExpression f = mk.Select(mk.Select(mk.Ident(names.fromString("examrt")), names.fromString("ExamGuard")), names.fromString("tick"));
+            JCStatement call = mk.Exec(mk.Apply(List.<JCExpression>nil(), f, List.<JCExpression>nil()));
+            return mk.Block(0, List.of(call, body));
+        }
+        public void visitWhileLoop(JCWhileLoop t) { super.visitWhileLoop(t); t.body = wrap(t.body); result = t; }
+        public void visitDoLoop(JCDoWhileLoop t) { super.visitDoLoop(t); t.body = wrap(t.body); result = t; }
+        public void visitForLoop(JCForLoop t) { super.visitForLoop(t); t.body = wrap(t.body); result = t; }
+        public void visitForeachLoop(JCEnhancedForLoop t) { super.visitForeachLoop(t); t.body = wrap(t.body); result = t; }
+        JCExpression guardCall(String m) {
+            return mk.Apply(List.<JCExpression>nil(), mk.Select(mk.Select(mk.Ident(names.fromString("examrt")), names.fromString("ExamGuard")), names.fromString(m)), List.<JCExpression>nil());
+        }
+        public void visitNewClass(JCNewClass t) {
+            super.visitNewClass(t);
+            String c = t.clazz.toString();
+            if ((c.equals("Random") || c.equals("java.util.Random")) && t.args.isEmpty() && t.def == null) {
+                mk.at(t.pos);
+                t.args = List.of(guardCall("nextSeed"));
+            }
+            result = t;
+        }
+        public void visitApply(JCMethodInvocation t) {
+            super.visitApply(t);
+            if (t.args.isEmpty() && t.meth instanceof JCFieldAccess) {
+                JCFieldAccess f = (JCFieldAccess) t.meth;
+                String q = f.selected.toString();
+                if (f.name.toString().equals("random") && (q.equals("Math") || q.equals("java.lang.Math"))) {
+                    mk.at(t.pos);
+                    result = guardCall("random");
+                    return;
+                }
+            }
+            result = t;
+        }
+        public void visitMethodDef(JCMethodDecl t) {
+            super.visitMethodDef(t);
+            if (t.body != null && !t.name.toString().equals("<init>")) {
+                // also guard recursion-heavy methods
+                mk.at(t.body.pos);
+                JCExpression f = mk.Select(mk.Select(mk.Ident(names.fromString("examrt")), names.fromString("ExamGuard")), names.fromString("tick"));
+                t.body.stats = t.body.stats.prepend(mk.Exec(mk.Apply(List.<JCExpression>nil(), f, List.<JCExpression>nil())));
+            }
+            result = t;
+        }
+    }
+
+    // ---------------- run ----------------
+    static int run(String inputs, String outDir, long limit, long seed) throws Exception {
+        // close windows left over from an earlier run
+        try { for (java.awt.Frame f : java.awt.Frame.getFrames()) f.dispose(); } catch (Throwable t) { }
+        final ByteArrayInputStream bin = new ByteArrayInputStream(inputs.getBytes("UTF-8"));
+        System.setIn(new InputStream() {
+            public int read() { int c = bin.read(); if (c < 0) { System.out.flush(); throw new NeedInput(); } return c; }
+            public int read(byte[] b, int o, int l) {
+                if (l == 0) return 0;
+                int n = bin.read(b, o, Math.min(l, Math.max(1, bin.available())));
+                if (n <= 0) { System.out.flush(); throw new NeedInput(); }
+                return n;
+            }
+            public int available() { return bin.available(); }
+        });
+        URLClassLoader cl = new URLClassLoader(new URL[]{ new File(outDir).toURI().toURL() }, ExamRunner.class.getClassLoader());
+        Method main = findMain(cl, new File(outDir), "");
+        if (main == null) {
+            ERR.println("No main method found. Add:  public static void main(String[] args)");
+            return 44;
+        }
+        ExamGuard.reset(limit, seed);
+        try {
+            main.invoke(null, (Object) new String[0]);
+        } catch (InvocationTargetException e) {
+            Throwable t = e.getCause();
+            System.out.flush();
+            if (t instanceof NeedInput) return 42;
+            if (t instanceof ExamGuard.Timeout) { ERR.println("\n" + t.getMessage()); return 43; }
+            if (t instanceof StackOverflowError) { ERR.println("\nException in thread \"main\" java.lang.StackOverflowError (check for infinite recursion)"); return 1; }
+            printException(t, outDir);
+            return 1;
+        }
+        System.out.flush();
+        try { for (java.awt.Frame f : java.awt.Frame.getFrames()) if (f.isDisplayable()) { ExamGuard.limitMs = Long.MAX_VALUE / 4; return 45; } } catch (Throwable t) { }
+        return 0;
+    }
+
+    static void printException(Throwable t, String outDir) {
+        String msg = t.getMessage();
+        ERR.println("Exception in thread \"main\" " + t.getClass().getName() + (msg != null ? ": " + msg : ""));
+        for (StackTraceElement s : t.getStackTrace()) {
+            String c = s.getClassName();
+            if (c.startsWith("sun.reflect") || c.startsWith("java.lang.reflect") || c.startsWith("examrt.")) break;
+            if (c.startsWith("java.") || c.startsWith("javax.") || c.startsWith("sun.")) continue;
+            ERR.println("\tat " + c + "." + s.getMethodName() + (s.getLineNumber() > 0 ? " (line " + s.getLineNumber() + ")" : ""));
+        }
+        Throwable cause = t.getCause();
+        if (cause != null && cause != t) ERR.println("Caused by: " + cause);
+    }
+
+    static Method findMain(ClassLoader cl, File dir, String pkg) {
+        File[] fs = dir.listFiles();
+        if (fs == null) return null;
+        Arrays.sort(fs);
+        Method found = null;
+        for (File f : fs) {
+            if (f.isDirectory()) {
+                Method m = findMain(cl, f, pkg + f.getName() + ".");
+                if (m != null && found == null) found = m;
+            } else if (f.getName().endsWith(".class") && f.getName().indexOf('$') < 0) {
+                try {
+                    Class<?> c = Class.forName(pkg + f.getName().substring(0, f.getName().length() - 6), false, cl);
+                    Method m = c.getDeclaredMethod("main", String[].class);
+                    if (Modifier.isStatic(m.getModifiers())) {
+                        m.setAccessible(true);
+                        if (Modifier.isPublic(c.getModifiers())) return m;
+                        if (found == null) found = m;
+                    }
+                } catch (Throwable t) { }
+            }
+        }
+        return found;
+    }
+}
+</script>
+
+<script>
+(function () {
+  var TOOLS_URL = 'https://javafiddle.leaningtech.com/tools.jar';   // OpenJDK 8 javac, run in the browser by CheerpJ
+  var CP = '/str/tools.jar:/files/';
+  var TIME_LIMIT = 10000;
+
+  var code = document.getElementById('code');
+  var gutter = document.getElementById('gutter');
+  var out = document.getElementById('out');
+  var runBtn = document.getElementById('run');
+  var stopBtn = document.getElementById('stop');
+  var clearBtn = document.getElementById('clear');
+  var statusEl = document.getElementById('status');
+  var guiPane = document.getElementById('guipane');
+
+  var ready = false, running = false, guiOpen = false;
+  var stopFlag = 0, waiter = null;
+  var compiled = { src: null, dir: null, ok: false }, buildNo = 0;
+  var session = null;   // { inputs, shown, seed }
+  var skip = 0;         // characters of output already shown (replayed runs print them again)
+  var outChars = 0, MAX_OUT = 200000;
+
+  // ---------- output ----------
+  function write(text, cls) {
+    if (outChars > MAX_OUT) return;
+    outChars += text.length;
+    if (outChars > MAX_OUT) { text = '\n[Output too long - stopped showing more]\n'; cls = 'sys'; }
+    var span = document.createElement('span');
+    if (cls) span.className = cls;
+    span.textContent = text;
+    out.appendChild(span);
+    out.scrollTop = out.scrollHeight;
+  }
+  function programOut(s) {
+    if (session) {
+      if (skip > 0) {
+        if (s.length <= skip) { skip -= s.length; return; }
+        s = s.slice(skip); skip = 0;
+      }
+      session.shown += s.length;
+    }
+    write(s);
+  }
+
+  // ---------- Java side ----------
+  // Each Java call ends when the runner reports back (done) or the JVM call returns (e.g. System.exit).
+  var callNo = 0;
+  function finished(code) { if (waiter) { var w = waiter; waiter = null; w.resolve(code); } }
+  function javaCall(args) {
+    return new Promise(function (resolve) {
+      var id = ++callNo;
+      waiter = { id: id, resolve: resolve };
+      cheerpjRunMain.apply(null, ['examrt.ExamRunner', CP].concat(args)).then(function (c) {
+        if (waiter && waiter.id === id) finished(c);
+      });
+    });
+  }
+
+  async function boot() {
+    try {
+      await cheerpjInit({
+        version: 8, status: 'none', disableErrorReporting: true, disableLoadTimeReporting: true,
+        natives: {
+          async Java_examrt_ExamRunner_emit(lib, s) { programOut(s); },
+          async Java_examrt_ExamRunner_emitErr(lib, s) { write(s, 'err'); },
+          async Java_examrt_ExamRunner_jsStop(lib) { return stopFlag; },
+          async Java_examrt_ExamRunner_done(lib, c) { finished(c); }
+        }
+      });
+      cheerpjCreateDisplay(-1, -1, document.getElementById('gui'));
+      statusEl.textContent = 'Downloading the Java compiler…';
+      var jar = await (await fetch(TOOLS_URL)).arrayBuffer();
+      cheerpjAddStringFile('/str/tools.jar', new Uint8Array(jar));
+      // Compile the exam runner (source below) - this also warms up the compiler.
+      statusEl.textContent = 'Preparing the compiler (about 20 seconds the first time)…';
+      var enc = new TextEncoder();
+      cheerpjAddStringFile('/str/ExamGuard.java', enc.encode(document.getElementById('rt-guard').textContent));
+      cheerpjAddStringFile('/str/ExamRunner.java', enc.encode(document.getElementById('rt-runner').textContent));
+      var rc0 = await cheerpjRunMain('com.sun.tools.javac.Main', '/str/tools.jar', '-nowarn', '-d', '/files/', '/str/ExamGuard.java', '/str/ExamRunner.java');
+      if (rc0 !== 0) throw new Error('runner did not compile (' + rc0 + ')');
+      ready = true;
+      setRunning(false);
+    } catch (e) {
+      statusEl.textContent = 'Java failed to load - reload the page';
+      write('Java could not load: ' + e + '\n', 'err');
+    }
+  }
+
+  function setRunning(on) {
+    running = on;
+    runBtn.disabled = !ready || on;
+    stopBtn.disabled = !on && !guiOpen;
+    if (!ready) return;
+    statusEl.textContent = on ? 'Running… (press Stop if it does not finish)' : (guiOpen ? 'GUI window open - press Stop to close it' : 'Ready');
+  }
+
+  // File name must match the public class (Java rule).
+  function fileName(src) {
+    var clean = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ').replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+    var m = clean.match(/\bpublic\s+(?:(?:final|abstract|strictfp)\s+)*(?:class|interface|enum)\s+([A-Za-z_$][\w$]*)/);
+    return (m ? m[1] : 'Main') + '.java';
+  }
+
+  async function closeGui() {
+    if (!guiOpen) return;
+    guiOpen = false;
+    await javaCall(['close']);
+    guiPane.classList.remove('show');
+  }
+
+  async function run() {
+    if (runBtn.disabled) return;
+    out.textContent = ''; outChars = 0;
+    setRunning(true);
+    await closeGui();
+    var src = code.value;
+    if (src !== compiled.src) {
+      statusEl.textContent = 'Compiling…';
+      var dir = '/files/b' + (++buildNo) + '/';
+      var path = '/str/' + fileName(src);
+      cheerpjAddStringFile(path, new TextEncoder().encode(src));
+      var rc = await javaCall(['compile', dir, path]);
+      compiled = { src: src, dir: dir, ok: rc === 0 };
+    }
+    if (!compiled.ok) { write('\n--- Fix the errors above and press Run again ---\n', 'sys'); setRunning(false); return; }
+    session = { inputs: [], shown: 0, seed: Math.floor(Math.random() * 1e9) };
+    exec();
+  }
+
+  async function exec() {
+    if (!session) return;
+    stopFlag = 0;
+    skip = session.shown;
+    statusEl.textContent = 'Running… (press Stop if it does not finish)';
+    var input = session.inputs.length ? session.inputs.join('\n') + '\n' : '';
+    var rc = await javaCall(['run', input, compiled.dir, String(TIME_LIMIT), String(session.seed)]);
+    if (!session) return;                       // stopped while waiting
+    if (rc === 42) { askInput(); return; }
+    if (rc === 45) {
+      guiOpen = true;
+      guiPane.classList.add('show');
+      write('\n--- GUI window is open (below). Press Stop to close it ---\n', 'sys');
+    } else if (rc === 43) {
+      write('--- Program stopped ---\n', 'sys');
+    } else if (rc === 44) {
+      // message already shown
+    } else {
+      write('\n--- Program finished ---\n', 'sys');
+    }
+    session = null;
+    setRunning(false);
+  }
+
+  function askInput() {
+    statusEl.textContent = 'Waiting for your input…';
+    var box = document.createElement('input');
+    box.type = 'text';
+    box.setAttribute('autocomplete', 'off');
+    box.setAttribute('autocorrect', 'off');
+    box.setAttribute('autocapitalize', 'off');
+    box.spellcheck = false;
+    box.setAttribute('aria-label', 'Program input');
+    out.appendChild(box);
+    out.scrollTop = out.scrollHeight;
+    box.focus();
+    box.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter' || !session) return;
+      ev.preventDefault();
+      var val = box.value;
+      var echo = document.createElement('span');
+      echo.className = 'in';
+      echo.textContent = val + '\n';
+      out.replaceChild(echo, box);
+      session.inputs.push(val);
+      exec();
+    });
+  }
+
+  async function stop() {
+    if (running && session) {
+      var box = out.querySelector('input');
+      if (box) {               // waiting for input: nothing is running in Java
+        box.remove();
+        session = null;
+        write('\n--- Program stopped ---\n', 'sys');
+        setRunning(false);
+        return;
+      }
+      stopFlag = 1;            // the loop guard sees this within a fraction of a second
+      return;
+    }
+    if (guiOpen) {
+      await closeGui();
+      write('--- GUI window closed ---\n', 'sys');
+      setRunning(false);
+    }
+  }
+
+  // Keep a draft in this browser tab only, so an accidental reload does not lose work.
+  try { var saved = sessionStorage.getItem('javaexam_draft'); if (saved) code.value = saved; } catch (e) {}
+
+  // Colour the code. Display only - no suggestions, no autocomplete.
+  var hl = document.getElementById('hl');
+  var KW = ' abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for goto if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while var true false null ';
+  var BI = ' String System Scanner Math Integer Double Character Boolean Long Object ArrayList List Arrays Random Exception RuntimeException ArithmeticException NumberFormatException InputMismatchException ArrayIndexOutOfBoundsException NullPointerException IllegalArgumentException JFrame JPanel JButton JLabel JTextField JTextArea JOptionPane JCheckBox JRadioButton JComboBox ButtonGroup FlowLayout BorderLayout GridLayout ActionListener ActionEvent Color Font Override ';
+  var TOKEN = /("(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?)|(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|(\b\d+(?:\.\d*)?(?:[eE][+-]?\d+)?[fFdDlL]?\b|\.\d+\b)|(@[A-Za-z_]\w*)|([A-Za-z_$][\w$]*)/g;
+  function esc(t) { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function highlight() {
+    var src = code.value, html = '', last = 0, m, prevWord = '';
+    TOKEN.lastIndex = 0;
+    while ((m = TOKEN.exec(src)) !== null) {
+      html += esc(src.slice(last, m.index));
+      var t = m[0], cls = '';
+      if (m[1]) cls = 't-str';
+      else if (m[2]) cls = 't-com';
+      else if (m[3]) cls = 't-num';
+      else if (m[4]) cls = 't-ann';
+      else if (m[5]) {
+        if (prevWord === 'class' || prevWord === 'interface' || prevWord === 'enum') cls = 't-def';
+        else if (KW.indexOf(' ' + t + ' ') >= 0) cls = 't-kw';
+        else if (BI.indexOf(' ' + t + ' ') >= 0) cls = 't-bi';
+        prevWord = t;
+      }
+      if (!m[5]) prevWord = '';
+      html += cls ? '<span class="' + cls + '">' + esc(t) + '</span>' : esc(t);
+      last = m.index + t.length;
+    }
+    html += esc(src.slice(last));
+    hl.innerHTML = html + '\n';
+    syncScroll();
+  }
+  function syncScroll() { hl.scrollTop = code.scrollTop; hl.scrollLeft = code.scrollLeft; gutter.scrollTop = code.scrollTop; }
+
+  function updateGutter() {
+    var n = code.value.split('\n').length, s = '';
+    for (var i = 1; i <= n; i++) s += i + '\n';
+    gutter.textContent = s;
+    gutter.scrollTop = code.scrollTop;
+  }
+  code.addEventListener('input', function () {
+    updateGutter();
+    highlight();
+    try { sessionStorage.setItem('javaexam_draft', code.value); } catch (e) {}
+  });
+  code.addEventListener('scroll', syncScroll);
+
+  // Tab inserts 4 spaces; Enter keeps the indentation (adds 4 after "{"); "}" on an empty line moves back 4.
+  code.addEventListener('keydown', function (e) {
+    var s = code.selectionStart, en = code.selectionEnd, v = code.value;
+    var lineStart = v.lastIndexOf('\n', s - 1) + 1;
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        var rm = v.substr(lineStart, 4).match(/^ {1,4}/);
+        if (rm) { code.value = v.slice(0, lineStart) + v.slice(lineStart + rm[0].length); code.selectionStart = code.selectionEnd = Math.max(lineStart, s - rm[0].length); }
+      } else {
+        code.value = v.slice(0, s) + '    ' + v.slice(en);
+        code.selectionStart = code.selectionEnd = s + 4;
+      }
+      code.dispatchEvent(new Event('input'));
+    } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      var line = v.slice(lineStart, s);
+      var indent = line.match(/^\s*/)[0];
+      if (/\{\s*$/.test(line)) indent += '    ';
+      code.value = v.slice(0, s) + '\n' + indent + v.slice(en);
+      code.selectionStart = code.selectionEnd = s + 1 + indent.length;
+      code.dispatchEvent(new Event('input'));
+    } else if (e.key === '}' && s === en && /^ +$/.test(v.slice(lineStart, s))) {
+      e.preventDefault();
+      var cut = Math.min(4, s - lineStart);
+      code.value = v.slice(0, s - cut) + '}' + v.slice(en);
+      code.selectionStart = code.selectionEnd = s - cut + 1;
+      code.dispatchEvent(new Event('input'));
+    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault(); run();
+    }
+  });
+
+  runBtn.addEventListener('click', run);
+  stopBtn.addEventListener('click', stop);
+  clearBtn.addEventListener('click', function () { if (!running) { out.textContent = ''; outChars = 0; } });
+  // Block the right-click menu outside the code box, so there is no "search the web" / "look up" option.
+  document.addEventListener('contextmenu', function (e) { if (e.target !== code) e.preventDefault(); });
+  if (!code.value) code.value = 'public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello");\n    }\n}\n';
+  updateGutter();
+  highlight();
+  boot();
+  code.focus();
+})();
+</script>
+</body>
+</html>
