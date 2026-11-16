@@ -218,7 +218,8 @@
     var src = code.value;
     if (src !== compiled.src) {
       statusEl.textContent = 'Compiling…';
-      var dir = '/files/b' + (++buildNo) + '/';
+      // /files/ is kept by the browser between visits, so every build gets a fresh folder name.
+      var dir = '/files/b' + Date.now().toString(36) + '_' + (++buildNo) + '/';
       var prep = prepare(src);
       var path = '/str/' + prep.name;
       cheerpjAddStringFile(path, new TextEncoder().encode(prep.src));
