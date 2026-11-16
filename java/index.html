@@ -144,7 +144,7 @@
         version: 8, status: 'none', disableErrorReporting: true, disableLoadTimeReporting: true,
         natives: {
           async Java_examrt_ExamRunner_emit(lib, s) { programOut(s); },
-          async Java_examrt_ExamRunner_emitErr(lib, s) { write(s, 'err'); },
+          async Java_examrt_ExamRunner_emitErr(lib, s) { write(s.replace(/^[\w$]+\.java:(\d+): error:/gm, 'Line $1: error:'), 'err'); },
           async Java_examrt_ExamRunner_jsStop(lib) { return stopFlag; },
           async Java_examrt_ExamRunner_done(lib, c) { finished(c); }
         }
@@ -175,11 +175,32 @@
     statusEl.textContent = on ? 'Running… (press Stop if it does not finish)' : (guiOpen ? 'GUI window open - press Stop to close it' : 'Ready');
   }
 
-  // File name must match the public class (Java rule).
-  function fileName(src) {
-    var clean = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ').replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
-    var m = clean.match(/\bpublic\s+(?:(?:final|abstract|strictfp)\s+)*(?:class|interface|enum)\s+([A-Za-z_$][\w$]*)/);
-    return (m ? m[1] : 'Main') + '.java';
+  // Students write all their classes in one box. Java allows only one public top-level class per file,
+  // so the "public" of the other top-level classes is blanked out (same length, so line/column numbers stay right)
+  // and the file is named after the class that has main.
+  function prepare(src) {
+    var re = /\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|"(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?|[{}]|\b(?:public|class|interface|enum)\b|\b[A-Za-z_$][\w$]*\b/g;
+    var depth = 0, m, pendingPublic = -1, types = [], expectName = null, startDepth = 0;
+    while ((m = re.exec(src)) !== null) {
+      var t = m[0];
+      if (t === '{') { depth++; continue; }
+      if (t === '}') { depth = Math.max(0, depth - 1); continue; }
+      if (t[0] === '/' || t[0] === '"' || t[0] === "'") continue;
+      if (depth !== 0) continue;
+      if (expectName) { types.push({ name: t, pub: expectName.pub, at: expectName.at, pos: m.index }); expectName = null; pendingPublic = -1; continue; }
+      if (t === 'public') { pendingPublic = m.index; continue; }
+      if (t === 'class' || t === 'interface' || t === 'enum') { expectName = { pub: pendingPublic >= 0, at: pendingPublic }; continue; }
+      if (t !== 'final' && t !== 'abstract' && t !== 'strictfp') pendingPublic = -1;
+    }
+    // the class holding main: the type declaration closest before the first "static void main"
+    var mainAt = src.search(/\bstatic\s+void\s+main\s*\(/), mainType = null;
+    types.forEach(function (ty) { if (mainAt < 0 || ty.pos < mainAt) mainType = ty; });
+    if (!mainType) mainType = types.filter(function (ty) { return ty.pub; })[0] || types[0];
+    var out = src;
+    types.forEach(function (ty) {
+      if (ty.pub && ty !== mainType) out = out.slice(0, ty.at) + '      ' + out.slice(ty.at + 6);
+    });
+    return { name: (mainType ? mainType.name : 'Main') + '.java', src: out };
   }
 
   async function closeGui() {
@@ -198,8 +219,9 @@
     if (src !== compiled.src) {
       statusEl.textContent = 'Compiling…';
       var dir = '/files/b' + (++buildNo) + '/';
-      var path = '/str/' + fileName(src);
-      cheerpjAddStringFile(path, new TextEncoder().encode(src));
+      var prep = prepare(src);
+      var path = '/str/' + prep.name;
+      cheerpjAddStringFile(path, new TextEncoder().encode(prep.src));
       var rc = await javaCall(['compile', dir, path]);
       compiled = { src: src, dir: dir, ok: rc === 0 };
     }
