@@ -216,8 +216,13 @@
     document.querySelectorAll('#gui .cjWindow').forEach(function (w) { w.style.display = 'none'; });
   }
 
-  async function run() {
+  // After a Swing program is stopped, the in-browser compiler can fail once with an internal error
+  // (NoClassDefFoundError in com.sun.tools.javac). The same Run works the second time, so retry once by itself.
+  var INTERNAL = /Internal error: java\.lang\.NoClassDefFoundError|NoClassDefFoundError: com\/sun\/tools/;
+  var runRetry = false;
+  async function run(retry) {
     if (runBtn.disabled) return;
+    runRetry = retry === true;
     out.textContent = ''; outChars = 0;
     setRunning(true);
     await closeGui();
@@ -232,6 +237,7 @@
       cheerpjAddStringFile(path, new TextEncoder().encode(prep.src));
       var rc = await javaCall(['compile', dir, path]);
       compiled = { src: src, dir: dir, ok: rc === 0 };
+      if (!runRetry && INTERNAL.test(out.textContent)) { compiled = { src: null }; setRunning(false); return run(true); }
     }
     if (!compiled.ok) { write('\n--- Fix the errors above and press Run again ---\n', 'sys'); setRunning(false); return; }
     // Show the GUI area before a Swing program starts, so its window has room to draw.
@@ -249,6 +255,7 @@
     var input = session.inputs.length ? session.inputs.join('\n') + '\n' : '';
     var rc = await javaCall(['run', input, compiled.dir, String(TIME_LIMIT), String(session.seed)]);
     if (!session) return;                       // stopped while waiting
+    if (!runRetry && INTERNAL.test(out.textContent)) { session = null; compiled = { src: null }; setRunning(false); return run(true); }
     if (rc === 42) { askInput(); return; }
     if (rc === 45) {
       guiOpen = true;
@@ -354,13 +361,24 @@
   }
   // Code copied from Blackboard or a web page can carry invisible characters (non-breaking spaces,
   // zero-width spaces) and curly quotes that javac rejects as "illegal character". Replace them.
+  // Code copied from some web pages arrives with a blank line after every line. Remove those extra lines
+  // so the line numbers match the original (only when every second line is blank, in 8+ lines of code).
+  function undouble(v) {
+    var t = v.split('\n');
+    while (t.length && t[t.length - 1].trim() === '') t.pop();
+    if (t.length < 15) return v;
+    for (var k = 1; k < t.length; k += 2) if (t[k].trim() !== '') return v;
+    var keep = [];
+    for (var k = 0; k < t.length; k += 2) keep.push(t[k]);
+    return keep.join('\n') + '\n';
+  }
   function cleanCode(v) {
-    return v.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, ' ')
+    return undouble(v.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, ' ')
             .replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, '')
             .replace(/[\u201c\u201d\u201e\u201f\u2033]/g, '"')
             .replace(/[\u2018\u2019\u201a\u201b\u2032]/g, "'")
             .replace(/[\u2013\u2014\u2212]/g, '-')
-            .replace(/\r\n?/g, '\n');
+            .replace(/\r\n?/g, '\n'));
   }
   code.addEventListener('input', function () {
     var c = cleanCode(code.value);
