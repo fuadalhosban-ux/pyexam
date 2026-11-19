@@ -207,7 +207,13 @@
     if (!guiOpen) return;
     guiOpen = false;
     await javaCall(['close']);
+    hideOldWindows();
     guiPane.classList.remove('show');
+  }
+
+  // A closed Swing window stays in the page, so hide it; otherwise the next Run shows old windows too.
+  function hideOldWindows() {
+    document.querySelectorAll('#gui .cjWindow').forEach(function (w) { w.style.display = 'none'; });
   }
 
   async function run() {
@@ -229,6 +235,7 @@
     }
     if (!compiled.ok) { write('\n--- Fix the errors above and press Run again ---\n', 'sys'); setRunning(false); return; }
     // Show the GUI area before a Swing program starts, so its window has room to draw.
+    hideOldWindows();
     if (/javax\.swing|java\.awt/.test(src)) guiPane.classList.add('show');
     session = { inputs: [], shown: 0, seed: Math.floor(Math.random() * 1e9) };
     exec();
